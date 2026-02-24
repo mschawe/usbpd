@@ -3,7 +3,7 @@
 use super::Source;
 use crate::counters::{Counter, CounterType};
 use crate::dummy::{
-    DummyDriver, DummyDualRoleDevice, DummyDualRoleNoSwapsDevice, DummySourceDevice, DummyTimer, MAX_DATA_MESSAGE_SIZE,
+    DummyDriver, DummyDualRoleDevice, DummySourceDevice, DummyTimer, MAX_DATA_MESSAGE_SIZE,
     get_dummy_source_capabilities,
 };
 use crate::protocol_layer::message::Message;
@@ -12,13 +12,12 @@ use crate::protocol_layer::message::data::request::{CurrentRequest, FixedVariabl
 use crate::protocol_layer::message::data::source_capabilities::SourceCapabilities;
 use crate::protocol_layer::message::header::{ControlMessageType, DataMessageType, Header, MessageType};
 use crate::source::device_policy_manager::{
-    CapabilityResponse, DevicePolicyManager as DPM, DualRoleDevicePolicyManager as DRP_DPM,
-    EprDevicePolicyManager as EPR_DPM, SourceDpm,
+    CapabilityResponse, SourceDpm,
 };
 use crate::source::policy_engine::{DataRoleSwap, FastPowerRoleSwap, PowerRoleSwap, State, SwapState};
 
 fn simulate_sink_control_message<DPM: SourceDpm>(
-    policy_engine: &mut Source<DummyDriver<MAX_DATA_MESSAGE_SIZE>, DummyTimer, DPM>,
+    policy_engine: &mut Source<'_, DummyDriver<MAX_DATA_MESSAGE_SIZE>, DummyTimer, DPM>,
     control_message_type: ControlMessageType,
     message_id: u8,
 ) {
@@ -78,7 +77,7 @@ fn simulate_sink_request<DPM: SourceDpm>(
 }
 
 async fn run_test_step<DPM: SourceDpm>(
-    policy_engine: &mut Source<DummyDriver<MAX_DATA_MESSAGE_SIZE>, DummyTimer, DPM>,
+    policy_engine: &mut Source<'_, DummyDriver<MAX_DATA_MESSAGE_SIZE>, DummyTimer, DPM>,
     _new_state: &State,
     step_number: usize,
 ) {
@@ -94,7 +93,9 @@ async fn run_test_step<DPM: SourceDpm>(
 
 #[tokio::test]
 async fn test_negotiation() {
-    let mut policy_engine = Source::new(DummyDriver::new(), DummySourceDevice, false);
+    let mut driver = DummyDriver::new();
+    let mut device = DummySourceDevice;
+    let mut policy_engine = Source::new(&mut driver, &mut device, false);
 
     eprintln!("\n<== Starting initial source SPR negotiation test! ==>\n");
     {
@@ -252,7 +253,9 @@ async fn test_negotiation() {
 #[tokio::test]
 async fn test_discovery() {
     const MAX_DISCOVERY_ITERS: usize = 52;
-    let mut policy_engine = Source::new(DummyDriver::new(), DummySourceDevice, false);
+    let mut driver = DummyDriver::new();
+    let mut device = DummySourceDevice;
+    let mut policy_engine = Source::new(&mut driver, &mut device, false);
 
     // HardReset -> Discovery -> Disabled
     eprintln!("\n<== Starting source discovery test! ==>\n");
@@ -300,7 +303,7 @@ async fn test_discovery() {
 /// Take a new policy engine and skip the initial negotation:
 /// `Startup -> ... -> Ready`
 async fn skip_to_ready<DPM: SourceDpm>(
-    policy_engine: &mut Source<DummyDriver<MAX_DATA_MESSAGE_SIZE>, DummyTimer, DPM>,
+    policy_engine: &mut Source<'_, DummyDriver<MAX_DATA_MESSAGE_SIZE>, DummyTimer, DPM>,
 ) {
     assert!(matches!(policy_engine.state, State::Startup { role_swap: false }));
 
@@ -327,7 +330,9 @@ async fn skip_to_ready<DPM: SourceDpm>(
 async fn test_role_swapping() {
     eprintln!("\n<== Starting source power role swap test! ==>\n");
     {
-        let mut policy_engine = Source::new_dual_role(DummyDriver::new(), DummyDualRoleDevice, false);
+        let mut driver = DummyDriver::new();
+        let mut device = DummyDualRoleDevice;
+        let mut policy_engine = Source::new_dual_role(&mut driver, &mut device, false);
         skip_to_ready(&mut policy_engine).await;
 
         simulate_sink_control_message(&mut policy_engine, ControlMessageType::PrSwap, 2);
@@ -388,7 +393,9 @@ async fn test_role_swapping() {
 
     eprintln!("\n<== Starting source fast power role swap test! ==>\n");
     {
-        let mut policy_engine = Source::new_dual_role(DummyDriver::new(), DummyDualRoleDevice, false);
+        let mut driver = DummyDriver::new();
+        let mut device = DummyDualRoleDevice;
+        let mut policy_engine = Source::new_dual_role(&mut driver, &mut device, false);
         skip_to_ready(&mut policy_engine).await;
 
         simulate_sink_control_message(&mut policy_engine, ControlMessageType::FrSwap, 2);
@@ -448,7 +455,9 @@ async fn test_role_swapping() {
 
     eprintln!("\n<== Starting source data role swap test! ==>\n");
     {
-        let mut policy_engine = Source::new_dual_role(DummyDriver::new(), DummyDualRoleDevice, false);
+        let mut driver = DummyDriver::new();
+        let mut device = DummyDualRoleDevice;
+        let mut policy_engine = Source::new_dual_role(&mut driver, &mut device, false);
         skip_to_ready(&mut policy_engine).await;
 
         simulate_sink_control_message(&mut policy_engine, ControlMessageType::DrSwap, 2);
@@ -492,7 +501,9 @@ async fn test_role_swapping() {
     eprintln!("\n<== Starting source role swap policy engine rejects test! ==>\n");
     {
         // Test rejects at the policy engine layer (i.e. this is not a dual-role device)
-        let mut policy_engine = Source::new(DummyDriver::new(), DummyDualRoleNoSwapsDevice, false);
+        let mut driver = DummyDriver::new();
+        let mut device = DummySourceDevice;
+        let mut policy_engine = Source::new(&mut driver, &mut device, false);
         skip_to_ready(&mut policy_engine).await;
 
         simulate_sink_control_message(&mut policy_engine, ControlMessageType::PrSwap, 2);
@@ -521,8 +532,10 @@ async fn test_role_swapping() {
 
     eprintln!("\n<== Starting source role swap dpm rejects test! ==>\n");
     {
-        // Test rejects at the DPM layer (i.e. this is a dual role device that lets the DPM evaluate the requests)
-        let mut policy_engine = Source::new_dual_role(DummyDriver::new(), DummyDualRoleNoSwapsDevice, false);
+        // Test rejects at the DPM layer
+        let mut driver = DummyDriver::new();
+        let mut device = DummySourceDevice;
+        let mut policy_engine = Source::new_dual_role(&mut driver, &mut device, false);
         skip_to_ready(&mut policy_engine).await;
 
         simulate_sink_control_message(&mut policy_engine, ControlMessageType::PrSwap, 2);
